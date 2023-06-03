@@ -16,6 +16,7 @@ class ContactCreateRequest(BaseModel):
     lastname: str
     phone: str
     website: str
+    estado_clickup: str
 
 class TaskCreateRequest(BaseModel):
     name: str
@@ -39,7 +40,17 @@ def contacts(contact: ContactCreateRequest):
     """
     url = get_external_urls_hubspot('CREATE_CONTACT_HUBSPOT')
     headers = {"Authorization": f"Bearer {hubspot_key}"}
-    body = contact.dict()
+    contact_dict = contact.dict()
+    body = {
+        "properties": {
+            "email": contact_dict.get("email"),
+            "firstname": contact_dict.get("firstname"),
+            "lastname": contact_dict.get("lastname"),
+            "phone": contact_dict.get("phone"),
+            "website": contact_dict.get("website"),
+            "estado_clickup": contact_dict.get("estado_clickup")
+        }
+    }
 
     response = requests.post(url, json=body, headers=headers)
 
@@ -48,20 +59,62 @@ def contacts(contact: ContactCreateRequest):
     else:
         raise HTTPException(status_code=response.status_code, detail=response.json())
 @app.get("/contacts/")
-def get_contacts():
+def get_all_contacts():
+    """
+    API que obtiene todos los contactos en HubSpot SIN PAGINAR
+    :return: Datos de los contactos en formato JSON
+    """
+    url = "https://api.hubapi.com/crm/v3/objects/contacts"
+    headers = {"Authorization": f"Bearer {hubspot_key}"}
+
+    all_contacts = []
+
+    has_more = True
+    after = None
+
+    while has_more:
+        params = {"limit": 100}
+        if after:
+            params["after"] = after
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            contacts_data = response.json()
+            contacts = contacts_data.get('results', [])
+            all_contacts.extend(contacts)
+
+            pagination = contacts_data.get('paging', {})
+            next_page = pagination.get('next')
+            if next_page:
+                after = next_page.get('after')
+            else:
+                has_more = False
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.json())
+
+    return all_contacts
+
+@app.get("/contacts/{contact_id}")
+def get_contact(contact_id: str):
     """
         API que obtiene los contacto en hubspot
         :param contact:
         :return:
     """
-    url = get_external_urls_hubspot('CREATE_CONTACT_HUBSPOT')
+    url = f"https://api.hubapi.com/contacts/v1/contact/vid/{contact_id}/profile"
+
     headers = {"Authorization": f"Bearer {hubspot_key}"}
 
     response = requests.get(url, headers=headers)
 
     if response.status_code == 200:
-        return response.json()
+        properties = response.json().get("properties", {})
+
+        return properties
     else:
+        if response.status_code == 404:
+            raise HTTPException(status_code=response.status_code, detail="NOT found")
         raise HTTPException(status_code=response.status_code, detail=response.json())
 @app.post("/clickup/tasks/")
 def create_task(task: TaskCreateRequest):
@@ -84,27 +137,43 @@ def create_task(task: TaskCreateRequest):
 @app.post("/sync_contacts/")
 async def sync_contacts(background_tasks: BackgroundTasks):
     """
-    Api que sincroniza los contactos que se han creado con las tareas en clickup
+    Api que sincroniza los contactos de hubapi que se han creado con las tareas en clickup, revisa si ya existe usando la propiedad estado_clickup,
+    si no ha sido creado crea la tarea en clickup
     :param background_tasks:
     :return:
     """
     async def sync_contacts_task():
-        contacts = get_contacts()
+        contacts = get_all_contacts()
+        cant_contactos = len(contacts)  # Obtener la cantidad de contactos
+        print(f"----------- iniciando sincronizacion de {cant_contactos} contactos -----------")
         if contacts:
-            for contact in contacts.get('results', None):
+            for contact in contacts:
                 try:
-                    print(contact)
-                    task_request = TaskCreateRequest(
-                        name=contact.get('firstname', '') + ' ' + contact.get('lastname', ''),
-                        description=contact.get('company', '') + ' '+ contact.get('email', ''),
-                        priority='3'
-                    )
-                    response = create_task(task_request)
-                    print(response['status_code'])
+                    if contact.get('id', None):
+                        obtener_estado_clickup = get_contact(contact.get('id'))
+
+                        if obtener_estado_clickup.get('estado_clickup'):
+                            estado_clickup = obtener_estado_clickup.get('estado_clickup').get('value')
+
+                            if estado_clickup == "pending":
+                                task_request = TaskCreateRequest(
+                                    name=contact.get('firstname', '') + ' ' + contact.get('lastname', ''),
+                                    description=contact.get('company', '') + ' ' + contact.get('email', ''),
+                                    priority='3'
+                                )
+                                response = create_task(task_request)
+                                if response['status_code'] == 200:
+                                    print(response['status_code'], " ", contact.get("email"), "  sincronizado!")
+                                else:
+                                    print(contact.get('id'),contact.get('email'), "No se debe sincronizar ya ha sido sincronizado (estado_clickup)")
+                            else:
+                                print(contact.get('id'),contact.get('email'), "No se debe sincronizar ya ha sido sincronizado (estado_clickup)")
+
+                        else:
+                            print(contact.get('id'),contact.get('email'), "No se debe sincronizar ya ha sido sincronizado (estado_clickup)")
                 except Exception as e:
                     print(f"Error al crear tarea para contacto: {contact.get('firstname', '')} {contact.get('lastname', '')}")
                     print(f"Mensaje de error: {str(e)}")
 
     background_tasks.add_task(sync_contacts_task)
-
-    return {"message": "Sincronización de contactos iniciada"}
+    return {"message": "Sincronización de contactos iniciada, ESTO PUEDE TARDAR un tiempo"}

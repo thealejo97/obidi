@@ -27,6 +27,8 @@ def get_external_urls_hubspot(id):
     base_url = 'https://api.hubapi.com/crm/v3/objects/'
     if id == 'CREATE_CONTACT_HUBSPOT':
         url = f"{base_url}contacts/"
+    if id == 'GET_CONTACT_HUBSPOT':
+        url = f"{base_url}contacts/"
     return url
 
 def get_external_urls_clickup(id):
