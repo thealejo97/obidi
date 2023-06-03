@@ -28,3 +28,4 @@ Aplicación que permite la creación de contactos en el portal hubspot y sincron
 /contacts [POST] crea un nuevo contacto en hubspot
 /clickup/tasks/ [POST] crea una nueva tarea en clic up con la información del contacto
 /sync_contacts/[POST] sincroniza los contactos de hubspot con clic up y valida que los contactos no se creen duplicados utilizando la propiedad estado_clickup
+/create_history_log_request/[POST] crea el registro en la base de datos con las peticiones, tipo, y fecha

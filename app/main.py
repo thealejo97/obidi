@@ -38,7 +38,15 @@ class TaskCreateRequest(BaseModel):
     description: str
     priority: str
 
-
+Base = declarative_base()
+class HistoryLogRequest(Base):
+    __tablename__ = 'history_log_requests'
+    id = Column(Integer, primary_key=True)
+    request_method = Column(String)
+    request_url = Column(String)
+    request_timestamp = Column(DateTime)
+#Creamos la tabla history_log_requests que almacenara los registros
+Base.metadata.create_all(engine)
 @app.post("/contacts/")
 def contacts(contact: ContactCreateRequest):
     """
@@ -192,18 +200,6 @@ async def sync_contacts(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(sync_contacts_task)
     return {"message": "Sincronización de contactos iniciada, ESTO PUEDE TARDAR un tiempo"}
-
-Base = declarative_base()
-class HistoryLogRequest(Base):
-    __tablename__ = 'history_log_requests'
-    id = Column(Integer, primary_key=True)
-    request_method = Column(String)
-    request_url = Column(String)
-    request_timestamp = Column(DateTime)
-
-#Creamos la tabla history_log_requests que almacenara los registros
-Base.metadata.create_all(engine)
-
 @app.post("/history-log-requests")
 async def create_history_log_request(request_path: str, request_method: str):
     """
