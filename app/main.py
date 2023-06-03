@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 import requests
 from pydantic import BaseModel
@@ -39,16 +41,22 @@ class TaskCreateRequest(BaseModel):
     priority: str
 
 Base = declarative_base()
+
 class HistoryLogRequest(Base):
     __tablename__ = 'history_log_requests'
     id = Column(Integer, primary_key=True)
     request_method = Column(String)
     request_url = Column(String)
     request_timestamp = Column(DateTime)
+
+class HistoryLogRequestModel(BaseModel):
+    request_method: str
+    request_url: str
+    request_timestamp: datetime
 #Creamos la tabla history_log_requests que almacenara los registros
 Base.metadata.create_all(engine)
 @app.post("/contacts/")
-def contacts(contact: ContactCreateRequest):
+async def contacts(contact: ContactCreateRequest):
     """
         API que crea un contacto en hubspot
         :param contact:
@@ -78,11 +86,19 @@ def contacts(contact: ContactCreateRequest):
     response = requests.post(url, json=body, headers=headers)
 
     if response.status_code == 201:
+        # Guardar el log de la petición
+        log = HistoryLogRequestModel(
+            request_method="[POST]",
+            request_url=url,
+            request_timestamp=datetime.now()
+        )
+        await create_history_log_request(history=log)
+
         return response.json()
     else:
         raise HTTPException(status_code=response.status_code, detail=response.json())
 @app.get("/contacts/")
-def get_all_contacts():
+async def get_all_contacts():
     """
     API que obtiene todos los contactos en HubSpot SIN PAGINAR
     :return: Datos de los contactos en formato JSON
@@ -103,6 +119,13 @@ def get_all_contacts():
         response = requests.get(url, headers=headers, params=params)
 
         if response.status_code == 200:
+            # Guardar el log de la petición
+            log = HistoryLogRequestModel(
+                request_method="[GET]",
+                request_url=url,
+                request_timestamp=datetime.now()
+            )
+            await create_history_log_request(history=log)
             contacts_data = response.json()
             contacts = contacts_data.get('results', [])
             all_contacts.extend(contacts)
@@ -117,9 +140,8 @@ def get_all_contacts():
             raise HTTPException(status_code=response.status_code, detail=response.json())
 
     return all_contacts
-
 @app.get("/contacts/{contact_id}")
-def get_contact(contact_id: str):
+async def get_contact(contact_id: str):
     """
         API que obtiene los contacto en hubspot
         :param contact:
@@ -133,6 +155,14 @@ def get_contact(contact_id: str):
 
     if response.status_code == 200:
         properties = response.json().get("properties", {})
+        # Guardar el log de la petición
+        log = HistoryLogRequestModel(
+            request_method="[GET]",
+            request_url=url,
+            request_timestamp=datetime.now()
+        )
+        await create_history_log_request(history=log)
+
 
         return properties
     else:
@@ -140,7 +170,7 @@ def get_contact(contact_id: str):
             raise HTTPException(status_code=response.status_code, detail="NOT found")
         raise HTTPException(status_code=response.status_code, detail=response.json())
 @app.post("/clickup/tasks/")
-def create_task(task: TaskCreateRequest):
+async def create_task(task: TaskCreateRequest):
     """
         API que crea un tasks en clickup
         :param
@@ -154,6 +184,15 @@ def create_task(task: TaskCreateRequest):
     response = requests.post(url, json=body, headers=headers)
 
     if response.status_code == 200:
+        # Guardar el log de la petición
+        log = HistoryLogRequestModel(
+            request_method="[POST]",
+            request_url=url,
+            request_timestamp=datetime.now()
+        )
+        await create_history_log_request(history=log)
+
+
         return {'status_code': response.status_code , 'data' : response.json()}
     else:
         return {'status_code': response.status_code , 'data' : response.json()}
@@ -166,14 +205,14 @@ async def sync_contacts(background_tasks: BackgroundTasks):
     :return:
     """
     async def sync_contacts_task():
-        contacts = get_all_contacts()
+        contacts = await  get_all_contacts()
         cant_contactos = len(contacts)  # Obtener la cantidad de contactos
         print(f"----------- iniciando sincronizacion de {cant_contactos} contactos -----------")
         if contacts:
             for contact in contacts:
                 try:
                     if contact.get('id', None):
-                        obtener_estado_clickup = get_contact(contact.get('id'))
+                        obtener_estado_clickup = await get_contact(contact.get('id'))
 
                         if obtener_estado_clickup.get('estado_clickup'):
                             estado_clickup = obtener_estado_clickup.get('estado_clickup').get('value')
@@ -200,25 +239,52 @@ async def sync_contacts(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(sync_contacts_task)
     return {"message": "Sincronización de contactos iniciada, ESTO PUEDE TARDAR un tiempo"}
-@app.post("/history-log-requests")
-async def create_history_log_request(request_path: str, request_method: str):
+@app.post("/history-log-requests/")
+async def create_history_log_request(history: HistoryLogRequestModel):
     """
-    Api que crea una instancia del modelo HistoryLogRequest con los datos proporcionados
-    :param request_path:
-    :param request_method:
-    :return:
+    API que crea una instancia del modelo HistoryLogRequest con los datos proporcionados y la guarda en la base de datos.
+    :param history: Datos del registro de log a crear
+    :return: Respuesta de éxito en caso de éxito
     """
-    log_request = HistoryLogRequest(request_path=request_path, request_method=request_method)
+    log_request = HistoryLogRequest(
+        request_method=history.request_method,
+        request_url=history.request_url,
+        request_timestamp=history.request_timestamp
+    )
 
-    session.add(log_request)
-    session.commit()
+    session = Session()
 
-    return {"message": "Registro creado exitosamente"}
-@app.get("/tables")
-async def get_tables():
-    inspector = inspect(engine)
+    try:
+        session.add(log_request)
+        session.commit()
+        return {"message": "Registro creado exitosamente"}
+    except Exception as e:
+        # Manejar el error según corresponda
+        return {"error": str(e)}
+    finally:
+        session.close()
+@app.get("/history-log-requests/")
+async def get_history_log_requests():
+    """
+    Api que devuelve todos los registros de logs almacenados en el log de peticiones
+    :return: Lista de registros de logs
+    """
+    session = Session()
 
-    # Obtiene una lista de los nombres de todas las tablas
-    table_names = inspector.get_table_names()
+    try:
+        history_logs = session.query(HistoryLogRequest).all()
+        results = []
+        for log in history_logs:
+            result = {
+                "id": log.id,
+                "request_method": log.request_method,
+                "request_url": log.request_url,
+                "request_timestamp": log.request_timestamp
+            }
+            results.append(result)
 
-    return {"tables": table_names}
+        return results
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        session.close()
