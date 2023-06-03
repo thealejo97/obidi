@@ -1,14 +1,29 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 import requests
 from pydantic import BaseModel
-from hubspot import HubSpot
+import asyncpg
 from utils import get_secret, get_external_urls_hubspot, get_external_urls_clickup
-
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, inspect
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 app = FastAPI()
 hubspot_key = get_secret("HUBSPOT_ACCESS_TOKEN")
 clickup_key = get_secret("CLICKUP_ACCESS_TOKEN")
+db_info = get_secret("DATABASE_DEFAULT")
+POSTGRES_USER = db_info.get('USER')
+POSTGRES_PASSWORD = db_info.get('PASSWORD')
+POSTGRES_HOST = db_info.get('HOST')
+POSTGRES_PORT = db_info.get('PORT')
+POSTGRES_DB = db_info.get('NAME')
 
+
+dsn = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}/{POSTGRES_DB}"
+
+engine = create_engine(dsn)
+
+Session = sessionmaker(bind=engine)
+session = Session()
 class ContactCreateRequest(BaseModel):
     company: str
     email: str
@@ -177,3 +192,37 @@ async def sync_contacts(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(sync_contacts_task)
     return {"message": "Sincronización de contactos iniciada, ESTO PUEDE TARDAR un tiempo"}
+
+Base = declarative_base()
+class HistoryLogRequest(Base):
+    __tablename__ = 'history_log_requests'
+    id = Column(Integer, primary_key=True)
+    request_method = Column(String)
+    request_url = Column(String)
+    request_timestamp = Column(DateTime)
+
+#Creamos la tabla history_log_requests que almacenara los registros
+Base.metadata.create_all(engine)
+
+@app.post("/history-log-requests")
+async def create_history_log_request(request_path: str, request_method: str):
+    """
+    Api que crea una instancia del modelo HistoryLogRequest con los datos proporcionados
+    :param request_path:
+    :param request_method:
+    :return:
+    """
+    log_request = HistoryLogRequest(request_path=request_path, request_method=request_method)
+
+    session.add(log_request)
+    session.commit()
+
+    return {"message": "Registro creado exitosamente"}
+@app.get("/tables")
+async def get_tables():
+    inspector = inspect(engine)
+
+    # Obtiene una lista de los nombres de todas las tablas
+    table_names = inspector.get_table_names()
+
+    return {"tables": table_names}
