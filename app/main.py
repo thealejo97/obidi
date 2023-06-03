@@ -63,19 +63,6 @@ def get_contacts():
         return response.json()
     else:
         raise HTTPException(status_code=response.status_code, detail=response.json())
-@app.post("/sync_contacts/")
-async def sync_contacts(background_tasks: BackgroundTasks):
-    async def sync_contacts_task():
-        contacts = get_contacts()
-        if contacts:
-            for contact in contacts.get('results', None):
-                print(contact)
-
-
-    background_tasks.add_task(sync_contacts_task)
-
-    return {"message": "Sincronización de contactos iniciada"}
-
 @app.post("/clickup/tasks/")
 def create_task(task: TaskCreateRequest):
     """
@@ -90,7 +77,34 @@ def create_task(task: TaskCreateRequest):
 
     response = requests.post(url, json=body, headers=headers)
 
-    if response.status_code == 201:
-        return response.json()
+    if response.status_code == 200:
+        return {'status_code': response.status_code , 'data' : response.json()}
     else:
-        raise HTTPException(status_code=response.status_code, detail=response.json())
+        return {'status_code': response.status_code , 'data' : response.json()}
+@app.post("/sync_contacts/")
+async def sync_contacts(background_tasks: BackgroundTasks):
+    """
+    Api que sincroniza los contactos que se han creado con las tareas en clickup
+    :param background_tasks:
+    :return:
+    """
+    async def sync_contacts_task():
+        contacts = get_contacts()
+        if contacts:
+            for contact in contacts.get('results', None):
+                try:
+                    print(contact)
+                    task_request = TaskCreateRequest(
+                        name=contact.get('firstname', '') + ' ' + contact.get('lastname', ''),
+                        description=contact.get('company', '') + ' '+ contact.get('email', ''),
+                        priority='3'
+                    )
+                    response = create_task(task_request)
+                    print(response['status_code'])
+                except Exception as e:
+                    print(f"Error al crear tarea para contacto: {contact.get('firstname', '')} {contact.get('lastname', '')}")
+                    print(f"Mensaje de error: {str(e)}")
+
+    background_tasks.add_task(sync_contacts_task)
+
+    return {"message": "Sincronización de contactos iniciada"}
